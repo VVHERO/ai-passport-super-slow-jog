@@ -16,8 +16,11 @@ static const char *TAG = "ssj_store";
 #define SSJ_KEY_CYCLES "cycles"
 #define SSJ_KEY_RUN_MIN "run_min"
 #define SSJ_KEY_REST_MIN "rest_min"
+#define SSJ_KEY_MUSIC "music"       // 新键:旧固件没有,缺失时用默认值(不整体回落)
+#define SSJ_KEY_FLASH "flash"
+#define SSJ_KEY_VOLUME "volume"
 
-// 出厂默认:经典超慢跑参数(180 步/分,自由跑 15 分钟)。
+// 出厂默认:经典超慢跑参数(180 步/分,自由跑 15 分钟,伴跑音乐开,闪屏强)。
 static ssj_config_t defaults(void) {
     ssj_config_t c = {0};
     c.mode = SSJ_MODE_FREE;
@@ -26,6 +29,9 @@ static ssj_config_t defaults(void) {
     c.cycles = SSJ_CYCLES_DEFAULT;
     c.run_min = SSJ_RUN_MIN_DEFAULT;
     c.rest_min = SSJ_REST_MIN_DEFAULT;
+    c.music = true;
+    c.flash = SSJ_FLASH_DEFAULT;
+    c.volume = SSJ_VOLUME_DEFAULT;
     return c;
 }
 
@@ -59,7 +65,15 @@ bool ssj_store_load(ssj_config_t *cfg) {
         cfg->cycles = cycles;
         cfg->run_min = run_min;
         cfg->rest_min = rest_min;
+    } else {
+        // 基础 6 键不全视为"没有旧版完整配置",其余仍用默认值。
     }
+
+    // 新增键:缺失时保留默认值,不因为升级固件就把用户参数清空。
+    uint8_t music = 0, flash = 0, volume = 0;
+    if (nvs_get_u8(h, SSJ_KEY_MUSIC, &music) == ESP_OK) cfg->music = (music != 0);
+    if (nvs_get_u8(h, SSJ_KEY_FLASH, &flash) == ESP_OK) cfg->flash = flash;
+    if (nvs_get_u8(h, SSJ_KEY_VOLUME, &volume) == ESP_OK) cfg->volume = volume;
     nvs_close(h);
 
     ssj_config_clamp(cfg);
@@ -84,6 +98,9 @@ bool ssj_store_save(const ssj_config_t *cfg) {
     err |= nvs_set_u16(h, SSJ_KEY_CYCLES, (uint16_t)safe.cycles);
     err |= nvs_set_u16(h, SSJ_KEY_RUN_MIN, (uint16_t)safe.run_min);
     err |= nvs_set_u16(h, SSJ_KEY_REST_MIN, (uint16_t)safe.rest_min);
+    err |= nvs_set_u8(h, SSJ_KEY_MUSIC, safe.music ? 1 : 0);
+    err |= nvs_set_u8(h, SSJ_KEY_FLASH, safe.flash);
+    err |= nvs_set_u8(h, SSJ_KEY_VOLUME, safe.volume);
     err |= nvs_commit(h);
     nvs_close(h);
     if (err != ESP_OK) {

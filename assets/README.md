@@ -23,8 +23,8 @@ The Super Slow Jog app (`main/ssj_app.c`) uses the following assets:
 | --- | --- |
 | `fonts/SourceHanSansCN-Regular.otf` | Source Han Sans CN Regular source font, used only to generate the subsets locally and not compiled into the firmware. Source: [adobe-fonts/source-han-sans](https://github.com/adobe-fonts/source-han-sans) (release branch, SubsetOTF/CN), SIL Open Font License 1.1, redistribution permitted. |
 | `fonts/LICENSE.txt` | Full text of the SIL Open Font License 1.1 covering that source font (Adobe copyright notice), distributed alongside it. |
-| `fonts/ssj_symbols.txt` | CJK character inventory locked to the actual UI strings (57 characters). Update it and regenerate whenever the copy changes. |
-| `fonts/ssj_font_20.c` | 20 px body subset: ASCII 0x20-0x7E + U+00B7 middle dot + full-width comma and period + the 57 characters above, 4 bpp uncompressed, about 126 KB of Flash. Compiled into the firmware and used for all copy in `main/ssj_app.c`. |
+| `fonts/ssj_symbols.txt` | CJK character inventory locked to the actual UI strings (65 characters). Update it and regenerate whenever the copy changes. |
+| `fonts/ssj_font_20.c` | 20 px body subset: ASCII 0x20-0x7E + U+00B7 middle dot + full-width comma and period + the 65 characters above, 4 bpp uncompressed, about 135 KB of Flash. Compiled into the firmware and used for all copy in `main/ssj_app.c`. |
 | `fonts/ssj_font_48.c` | 48 px large subset: ASCII 0x20-0x7E (digits, colon and percent for the timer), 4 bpp uncompressed, about 222 KB of Flash. |
 
 Generation commands (lv_font_conv, run from the repository root; pin the converter version with `npx lv_font_conv@<version>`):
@@ -70,6 +70,28 @@ Store reusable music and sound-effect sources in `music/`.
 - Prefer 16 kHz, 16-bit mono PCM when it matches the current BSP audio path.
 - Check Flash and internal-RAM cost before embedding audio; stream or chunk long recordings.
 - Do not commit media without redistribution permission.
+
+Bundled running music:
+
+| File | Description |
+| --- | --- |
+| `music/ssj_music.adp` | 400-second loop of the 180 BPM running track: 22,050 Hz mono, encoded as 4-bit IMA ADPCM in fixed 2,450-sample blocks (4-byte header + 1,225 bytes, 1,229 bytes per block), 3,600 blocks, 4,424,400 bytes. |
+
+- Source: a 33:28 "180 BPM running music" video supplied by the play's creator (720x1280, AAC 44.1 kHz stereo). The audio remains the creator's property, ships only with this play's firmware, and is not separately licensed for reuse.
+- **The file is not tracked by git** (`/assets/music/*.adp` is in `.gitignore`); only the packing script lives in the repository. After a fresh clone you must generate it with the command below, otherwise `main/CMakeLists.txt` stops with an explicit error during configuration.
+- The loop is taken from 428 s to 828 s: that span is an exact number of 180 BPM beats (one second equals three beats) and sits between two mix transitions. The last 40 ms are equal-power crossfaded with the opening 40 ms, so the loop point has no click.
+- Peak is normalised to 0.72 FS to leave headroom for the metronome click mixed on top.
+- ADPCM instead of MP3: decoding is table lookups and adds, so it costs no CPU and needs no decode buffer, and the metronome click can be mixed into the same I2S stream with its phase locked to the music.
+- Regenerate (needs the source video and ffmpeg):
+
+```bash
+python tools/pack_music.py "<source video>" assets/music/ssj_music.adp \
+  --start 428 --duration 400 --peak 0.72 --decode-check
+```
+
+`--duration` must be a whole number of seconds (one second equals three beats), otherwise
+the beat phase drifts at the loop point. `--decode-check` decodes the result back to WAV
+and prints the SNR (currently 25.9 dB).
 
 ## Battery profiles
 

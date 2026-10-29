@@ -34,6 +34,17 @@ typedef enum {
 #define SSJ_REST_MIN_MIN 1    // 单组歇时长下限(分)
 #define SSJ_REST_MIN_MAX 10   // 单组歇时长上限(分)
 
+#define SSJ_MUSIC_CADENCE 180     // 伴跑音乐为 180 步/分:开音乐时步频固定(不再允许改)
+
+// 屏幕随节拍闪烁的档位。0=关,1=柔(降到 45% 亮度),2=强(降到 8% 亮度)。
+// 默认"柔":3 Hz 的整屏明暗在强档下连续跑十几分钟会晃眼,柔和档已经能看清拍点。
+#define SSJ_FLASH_OFF 0
+#define SSJ_FLASH_SOFT 1
+#define SSJ_FLASH_STRONG 2
+#define SSJ_FLASH_DEFAULT SSJ_FLASH_SOFT
+
+#define SSJ_VOLUME_DEFAULT 60     // 出厂音量 60%(运行页 UP/DOWN 每次调 10%)
+
 #define SSJ_CADENCE_DEFAULT 180   // 超慢跑经典步频
 #define SSJ_FREE_MIN_DEFAULT 15   // 自由跑默认 15 分钟
 #define SSJ_CYCLES_DEFAULT 5      // 间歇默认 5 组
@@ -47,7 +58,13 @@ typedef struct {
     int cycles;        // 间歇组数,[1,20]
     int run_min;       // 单组跑时长(分),[1,30]
     int rest_min;      // 单组歇时长(分),[1,10]
+    bool music;        // 伴跑音乐:开时本次会话步频固定为 SSJ_MUSIC_CADENCE
+    uint8_t flash;     // 屏幕随拍闪烁档位:SSJ_FLASH_OFF / SOFT / STRONG
+    uint8_t volume;    // 输出音量 0..100(%)
 } ssj_config_t;
+
+// 本次会话实际生效的步频:开音乐时由音乐速度决定(180),否则用用户设置值。
+int ssj_config_cadence(const ssj_config_t *cfg);
 
 // 把任意配置收敛到合法范围(用于 NVS 读回旧/损坏数据时兜底)。
 void ssj_config_clamp(ssj_config_t *cfg);

@@ -15,3 +15,7 @@ managed_components/
 # Python 字节码缓存
 __pycache__/
 *.pyc
+
+# 伴跑音乐素材:含创作者的音乐,只随固件分发,不在仓库里再分发。
+# 生成方法见 assets/README.zh_CN.md(tools/pack_music.py)。
+/assets/music/*.adp

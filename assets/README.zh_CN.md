@@ -20,9 +20,9 @@
 | 文件 | 说明 |
 | --- | --- |
 | `fonts/SourceHanSansCN-Regular.otf` | 思源黑体 CN Regular 源字体，仅用于本地生成字体子集，不编译进固件。来源 [adobe-fonts/source-han-sans](https://github.com/adobe-fonts/source-han-sans)（release 分支 SubsetOTF/CN），SIL Open Font License 1.1，允许再分发。 |
-| `fonts/ssj_symbols.txt` | 超慢跑 UI 实际文案锁定的 CJK 字符清单（57 字）。修改文案后须同步更新并重新生成。 |
+| `fonts/ssj_symbols.txt` | 超慢跑 UI 实际文案锁定的 CJK 字符清单（65 字）。修改文案后须同步更新并重新生成。 |
 | `fonts/LICENSE.txt` | 上述源字体的 SIL Open Font License 1.1 全文（Adobe 版权声明），随源字体一同分发。 |
-| `fonts/ssj_font_20.c` | 20px 正文子集：ASCII 0x20-0x7E + U+00B7 中间点 + 全角逗号/句号 + 上述 57 个汉字，4bpp 未压缩，约 126KB Flash。编译进固件，供 `main/ssj_app.c` 全部文案使用。 |
+| `fonts/ssj_font_20.c` | 20px 正文子集：ASCII 0x20-0x7E + U+00B7 中间点 + 全角逗号/句号 + 上述 65 个汉字，4bpp 未压缩，约 135KB Flash。编译进固件，供 `main/ssj_app.c` 全部文案使用。 |
 | `fonts/ssj_font_48.c` | 48px 大字子集：ASCII 0x20-0x7E（数字/冒号/百分号计时显示），4bpp 未压缩，约 222KB Flash。 |
 
 生成命令（lv_font_conv，仓库根目录执行；转换器版本以 `npx lv_font_conv@<版本>` 锁定）：
@@ -70,6 +70,31 @@ npx lv_font_conv \
 - 与当前 BSP 音频路径匹配时优先采用 16 kHz、16 位单声道 PCM。
 - 嵌入音频前评估 Flash 与内部 RAM 成本；长录音应流式或分块。
 - 无再分发许可不提交媒体文件。
+
+超慢跑应用内置的伴跑音乐：
+
+| 文件 | 说明 |
+| --- | --- |
+| `music/ssj_music.adp` | 180 步/分伴跑音乐的 400 秒循环段：22,050 Hz / 单声道 / 16 bit 中间格式，编码为 4 bit IMA ADPCM，每块 2,450 采样（含 4 字节块头，1,229 字节/块），共 3,600 块、4,424,400 字节。 |
+
+- 素材来源：创作者提供的 33 分 28 秒「180 步频伴跑音乐」视频（720×1280 / AAC 44.1 kHz 立体声），
+  版权归创作者所有，仅随本玩法固件分发，不单独授权再利用。
+- **该文件不纳入版本管理**（`.gitignore` 里排除了 `/assets/music/*.adp`）：仓库只保留打包脚本。
+  全新克隆后必须先按下文命令生成，否则 `main/CMakeLists.txt` 会在配置阶段给出明确报错。
+- 截取第 428–828 秒：该段以 180 BPM（1 秒 = 3 拍）整拍对齐，首尾都有混音过渡，
+  尾巴 40 ms 与开头做等功率交叉淡化，循环回绕没有爆音。
+- 峰值归一化到 0.72 FS，给叠加的节拍提示音留出不削波的余量。
+- 之所以用 ADPCM 而不是 MP3：解码只是查表加法，不占 CPU、不引入解码缓冲，
+  节拍音可以直接混进同一路 I2S 数据，节拍与音乐的相位永远对齐。
+- 重新生成（需要源视频与 ffmpeg）：
+
+```bash
+python tools/pack_music.py "<源视频>" assets/music/ssj_music.adp \
+  --start 428 --duration 400 --peak 0.72 --decode-check
+```
+
+`--duration` 必须是整秒（1 秒 = 3 拍），否则循环回绕后节拍相位会歪；
+`--decode-check` 会把生成结果解码回 WAV 并打印 SNR（当前 25.9 dB）。
 
 ## 电池参数（battery）
 

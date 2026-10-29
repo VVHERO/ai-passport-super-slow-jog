@@ -32,10 +32,13 @@ def fail(msg):
 
 
 def extract_ui_codepoints(text):
-    """从 ssj_app.c 的字符串字面量提取实际文案的全部码点(排除注释)。"""
+    """从 ssj_app.c 的字符串字面量提取实际文案的全部码点(排除注释与自检固件分支)。"""
     # 去掉 // 与 /* */ 注释,避免把注释里的汉字当作文案。
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     text = re.sub(r"//[^\n]*", "", text)
+    # 自检固件分支(SSJ_SELFTEST)只在诊断构建里编译,里面的日志文案不进界面,
+    # 也不该逼着字体子集收进"会话/自动"这类日志用字。
+    text = re.sub(r"#ifdef SSJ_SELFTEST.*?#endif", "", text, flags=re.S)
     cps = set()
     for s in re.findall(r'"((?:[^"\\]|\\.)*)"', text):
         s = s.replace("\\n", "\n")
@@ -58,15 +61,39 @@ def font_opts_symbols(font_path):
     return (r.group(1) if r else ""), (s.group(1) if s else "")
 
 
+def parse_range_tokens(range_str):
+    """把 --range 参数解析成码点集合。
+
+    lv_font_conv 写 Opts 时会把单个码点写成十进制(如 U+00B7 -> 183),
+    区间保持十六进制,所以这里统一用 int(tok, 0) 兼容两种写法。
+    """
+    cps = set()
+    for tok in range_str.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            if "-" in tok:
+                lo, hi = tok.split("-", 1)
+                cps.update(range(int(lo, 0), int(hi, 0) + 1))
+            else:
+                cps.add(int(tok, 0))
+        except ValueError:
+            fail(f"无法解析 --range 片段: {tok!r}")
+    return cps
+
+
 def main():
     text = APP.read_text(encoding="utf-8")
     ui_cps = extract_ui_codepoints(text)
 
     # 1. ASCII 与中间点必须由 ssj_font_20 覆盖(UI 全部文案都走 20 号字)。
     r20, sym20 = font_opts_symbols(FONTS["ssj_font_20"])
-    if "0x20-0x7E" not in r20.replace("e", "E"):
+    cps20 = parse_range_tokens(r20)
+    missing_ascii = [c for c in range(0x20, 0x7F) if c not in cps20]
+    if missing_ascii:
         fail(f"ssj_font_20 未覆盖 ASCII 区: range={r20}")
-    if "0xb7" not in r20.lower():
+    if 0xB7 not in cps20:
         fail(f"ssj_font_20 未覆盖中间点 U+00B7: range={r20}")
 
     # 2. CJK 覆盖:UI 文案中的每个 CJK 码点必须在 ssj_symbols.txt 清单内,
@@ -89,7 +116,8 @@ def main():
 
     # 3. 48 号大字字体只用于 MM:SS/%,要求 ASCII 数字/冒号/百分号可用。
     r48, _ = font_opts_symbols(FONTS["ssj_font_48"])
-    if "0x20-0x7E" not in r48.replace("e", "E"):
+    cps48 = parse_range_tokens(r48)
+    if [c for c in range(0x20, 0x7F) if c not in cps48]:
         fail(f"ssj_font_48 未覆盖 ASCII 区: range={r48}")
 
     # 4. 反例:清单外的生僻字应判定不覆盖(防止检查无条件通过)。

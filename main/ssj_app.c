@@ -46,12 +46,28 @@ LV_FONT_DECLARE(ssj_font_20);   // 正文:中文 + ASCII
 LV_FONT_DECLARE(ssj_font_48);   // 大字计时:数字/冒号/百分号
 
 // 主页行高与布局(240x320,四角 30px 圆角遮罩,避开边角)。
-#define SSJ_ROW_H 36
+// 行高 32:最挤的情况是间歇模式且关音乐(6 行),行区 46..258,
+// 底部还要放两行 24px 高的按键提示,再高就顶到提示了。
+#define SSJ_ROW_H 32
 #define SSJ_ROW_GAP 4
 #define SSJ_ROW_X 12
 #define SSJ_ROW_W 216
 #define SSJ_ROW_Y0 46
 #define SSJ_MAX_ROWS 6   // 间歇模式:模式/步频/组数/跑/歇/开始
+
+// 主页行类型。开音乐时没有"步频"行(步频由音乐速度决定 180),行数随之变化。
+typedef enum {
+    SSJ_ROW_MODE = 0,
+    SSJ_ROW_CADENCE,
+    SSJ_ROW_DURATION,
+    SSJ_ROW_CYCLES,
+    SSJ_ROW_RUN,
+    SSJ_ROW_REST,
+    SSJ_ROW_START,
+} ssj_row_t;
+
+// 设置页行数(音乐 / 闪屏 / 音量 / 返回)。
+#define SSJ_SET_ROWS 4
 
 // ---------------------------------------------------------------------------
 // 应用状态(全部仅在 LVGL 上下文访问)
@@ -60,20 +76,29 @@ typedef enum {
     SSJ_PAGE_HOME = 0,
     SSJ_PAGE_RUN,
     SSJ_PAGE_DONE,
+    SSJ_PAGE_SETTINGS,
 } ssj_page_t;
 
 static ssj_page_t s_page;
 static ssj_config_t s_cfg;          // 主页正在编辑的配置
 static ssj_session_t s_sess;        // 运行会话
-static uint8_t s_volume = 60;       // 音量 0..100(运行页 UP/DOWN 调节)
+static uint8_t s_volume = SSJ_VOLUME_DEFAULT;   // 音量 0..100(运行页 UP/DOWN 调节)
 static int s_home_sel;              // 主页选中行索引
 
 // 主页对象
 static lv_obj_t *s_home_scr;
 static lv_obj_t *s_rows[SSJ_MAX_ROWS];    // 每行面板
 static lv_obj_t *s_row_labels[SSJ_MAX_ROWS]; // 每行 "名称  值" 标签
+static uint8_t s_row_kind[SSJ_MAX_ROWS];  // 每行实际类型(见 ssj_row_t)
 static int s_row_count;
 static lv_obj_t *s_battery_home;
+
+// 设置页对象
+static lv_obj_t *s_set_scr;
+static lv_obj_t *s_set_rows[SSJ_SET_ROWS];
+static lv_obj_t *s_set_labels[SSJ_SET_ROWS];
+static int s_set_sel;
+static lv_obj_t *s_battery_set;
 
 // 运行页对象
 static lv_obj_t *s_run_scr;
@@ -143,51 +168,62 @@ static void refresh_battery(lv_obj_t *label) {
 // ---------------------------------------------------------------------------
 // 主页
 // ---------------------------------------------------------------------------
-// 返回行标题;value_buf 写入当前值文本;返回 false = 该行是"开始"动作行。
-static bool home_row_content(int idx, char *name, size_t nlen, char *value, size_t vlen) {
-    // 行序按模式动态排列:0=模式 1=步频 之后模式专属参数,最后是"开始"。
-    if (idx == 0) {
-        lv_snprintf(name, (uint32_t)nlen, "模式");
-        lv_snprintf(value, (uint32_t)vlen, "%s",
-                    s_cfg.mode == SSJ_MODE_FREE ? "自由跑" : "间歇跑");
-        return true;
-    }
-    if (idx == 1) {
-        lv_snprintf(name, (uint32_t)nlen, "步频");
-        lv_snprintf(value, (uint32_t)vlen, "%d 步/分", s_cfg.cadence);
-        return true;
-    }
-    const bool interval = (s_cfg.mode == SSJ_MODE_INTERVAL);
-    const int param_rows = interval ? 3 : 1;   // 间歇:组数/跑/歇;自由:时长
-    const int last = 2 + param_rows;           // "开始"行索引
-    if (idx == last) {
-        lv_snprintf(name, (uint32_t)nlen, "开始");
-        lv_snprintf(value, (uint32_t)vlen, "OK");
-        return false;   // 动作行
-    }
-    if (!interval) {
-        lv_snprintf(name, (uint32_t)nlen, "时长");
-        lv_snprintf(value, (uint32_t)vlen, "%d 分", s_cfg.free_min);
-        return true;
-    }
-    if (idx == 2) {
-        lv_snprintf(name, (uint32_t)nlen, "组数");
-        lv_snprintf(value, (uint32_t)vlen, "%d 组", s_cfg.cycles);
-    } else if (idx == 3) {
-        lv_snprintf(name, (uint32_t)nlen, "跑");
-        lv_snprintf(value, (uint32_t)vlen, "%d 分", s_cfg.run_min);
+// 按当前模式与音乐开关排定行序:音乐开着就没有"步频"行(步频固定 180)。
+static void home_layout_rows(void) {
+    int n = 0;
+    s_row_kind[n++] = SSJ_ROW_MODE;
+    if (!s_cfg.music) s_row_kind[n++] = SSJ_ROW_CADENCE;
+    if (s_cfg.mode == SSJ_MODE_FREE) {
+        s_row_kind[n++] = SSJ_ROW_DURATION;
     } else {
-        lv_snprintf(name, (uint32_t)nlen, "歇");
-        lv_snprintf(value, (uint32_t)vlen, "%d 分", s_cfg.rest_min);
+        s_row_kind[n++] = SSJ_ROW_CYCLES;
+        s_row_kind[n++] = SSJ_ROW_RUN;
+        s_row_kind[n++] = SSJ_ROW_REST;
     }
-    return true;
+    s_row_kind[n++] = SSJ_ROW_START;
+    s_row_count = n;
+}
+
+// 返回行标题;value_buf 写入当前值文本;返回 false = 该行是"开始"动作行。
+static bool home_row_content(uint8_t kind, char *name, size_t nlen, char *value, size_t vlen) {
+    switch (kind) {
+        case SSJ_ROW_MODE:
+            lv_snprintf(name, (uint32_t)nlen, "模式");
+            lv_snprintf(value, (uint32_t)vlen, "%s",
+                        s_cfg.mode == SSJ_MODE_FREE ? "自由跑" : "间歇跑");
+            return true;
+        case SSJ_ROW_CADENCE:
+            lv_snprintf(name, (uint32_t)nlen, "步频");
+            lv_snprintf(value, (uint32_t)vlen, "%d 步/分", s_cfg.cadence);
+            return true;
+        case SSJ_ROW_DURATION:
+            lv_snprintf(name, (uint32_t)nlen, "时长");
+            lv_snprintf(value, (uint32_t)vlen, "%d 分", s_cfg.free_min);
+            return true;
+        case SSJ_ROW_CYCLES:
+            lv_snprintf(name, (uint32_t)nlen, "组数");
+            lv_snprintf(value, (uint32_t)vlen, "%d 组", s_cfg.cycles);
+            return true;
+        case SSJ_ROW_RUN:
+            lv_snprintf(name, (uint32_t)nlen, "跑");
+            lv_snprintf(value, (uint32_t)vlen, "%d 分", s_cfg.run_min);
+            return true;
+        case SSJ_ROW_REST:
+            lv_snprintf(name, (uint32_t)nlen, "歇");
+            lv_snprintf(value, (uint32_t)vlen, "%d 分", s_cfg.rest_min);
+            return true;
+        default:   // SSJ_ROW_START
+            lv_snprintf(name, (uint32_t)nlen, "开始");
+            lv_snprintf(value, (uint32_t)vlen, "OK");
+            return false;   // 动作行
+    }
 }
 
 // 选中行高亮重绘。
 static void home_refresh(void) {
     char name[16], value[32], text[64];
     for (int i = 0; i < s_row_count; i++) {
-        bool is_param = home_row_content(i, name, sizeof(name), value, sizeof(value));
+        bool is_param = home_row_content(s_row_kind[i], name, sizeof(name), value, sizeof(value));
         lv_snprintf(text, sizeof(text), is_param ? "%s  %s" : "%s  > %s", name, value);
         lv_label_set_text(s_row_labels[i], text);
         lv_obj_set_style_bg_color(s_rows[i],
@@ -198,13 +234,13 @@ static void home_refresh(void) {
     refresh_battery(s_battery_home);
 }
 
-// 按当前模式重建主页行(模式切换会改变行数)。
+// 按当前模式重建主页行(模式/音乐切换会改变行数)。
 static void home_build(void) {
     if (s_home_scr) {
         lv_obj_delete(s_home_scr);
         s_home_scr = NULL;
     }
-    s_row_count = (s_cfg.mode == SSJ_MODE_INTERVAL) ? 6 : 4;
+    home_layout_rows();
     if (s_home_sel >= s_row_count) s_home_sel = 0;
 
     s_home_scr = lv_obj_create(NULL);
@@ -234,51 +270,177 @@ static void home_build(void) {
         s_row_labels[i] = l;
     }
 
-    // 底部按键提示
+    // 底部按键提示(两行:选择/调节 + 进设置)
     lv_obj_t *hint = make_label(s_home_scr, &ssj_font_20, SSJ_COL_SUB);
-    lv_label_set_text(hint, "上/下 选择  OK 调节");
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_label_set_text(hint, "上/下选择  OK调节");
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -28);
+
+    lv_obj_t *hint2 = make_label(s_home_scr, &ssj_font_20, SSJ_COL_SUB);
+    lv_label_set_text(hint2, "长按 OK 进设置");
+    lv_obj_align(hint2, LV_ALIGN_BOTTOM_MID, 0, -4);
 
     home_refresh();
     lv_screen_load(s_home_scr);
 }
 
+// 开始会话:应用音乐/闪屏/音量设置,切到运行页。
+static void session_start(void) {
+    ssj_session_init(&s_sess, &s_cfg);
+    ssj_session_start(&s_sess, esp_timer_get_time());
+    ssj_store_save(&s_cfg);   // 保存失败不影响本次会话
+    run_page_build();
+
+    ssj_audio_set_volume(s_volume);
+    ssj_audio_set_flash(s_cfg.flash);
+    // 节拍器间隔 = 60000/步频;开音乐时步频固定 180(音乐速度)。
+    ssj_audio_metronome(60000u / (uint32_t)ssj_config_cadence(&s_cfg), true);
+    ssj_audio_tick_pitch(false);
+    ssj_audio_set_music(s_cfg.music, true);   // 新会话从素材开头播
+    s_page = SSJ_PAGE_RUN;
+}
+
 // OK 在选中行上:参数行循环+1;动作行启动会话。
 static void home_activate(void) {
-    if (s_home_sel == s_row_count - 1) {   // "开始"行
-        ssj_session_init(&s_sess, &s_cfg);
-        ssj_session_start(&s_sess, esp_timer_get_time());
-        ssj_store_save(&s_cfg);   // 保存失败不影响本次会话
-        run_page_build();
-        // 节拍器启动:间隔 = 60000/步频 毫秒,初始音高跑步。
-        ssj_audio_metronome(60000u / (uint32_t)s_cfg.cadence, true);
-        ssj_audio_tick_pitch(false);
-        s_page = SSJ_PAGE_RUN;
-        return;
-    }
-
-    if (s_home_sel == 0) {   // 模式循环
-        s_cfg.mode = (s_cfg.mode == SSJ_MODE_FREE) ? SSJ_MODE_INTERVAL : SSJ_MODE_FREE;
-        home_build();   // 行数变化,重建
-        return;
-    }
-    if (s_home_sel == 1) {   // 步频 +2 循环
-        s_cfg.cadence += 2;
-        if (s_cfg.cadence > SSJ_CADENCE_MAX) s_cfg.cadence = SSJ_CADENCE_MIN;
-    } else if (s_cfg.mode == SSJ_MODE_FREE) {
-        s_cfg.free_min++;   // 时长 +1 循环
-        if (s_cfg.free_min > SSJ_FREE_MIN_MAX) s_cfg.free_min = SSJ_FREE_MIN_MIN;
-    } else if (s_home_sel == 2) {
-        s_cfg.cycles++;
-        if (s_cfg.cycles > SSJ_CYCLES_MAX) s_cfg.cycles = SSJ_CYCLES_MIN;
-    } else if (s_home_sel == 3) {
-        s_cfg.run_min++;
-        if (s_cfg.run_min > SSJ_RUN_MIN_MAX) s_cfg.run_min = SSJ_RUN_MIN_MIN;
-    } else {
-        s_cfg.rest_min++;
-        if (s_cfg.rest_min > SSJ_REST_MIN_MAX) s_cfg.rest_min = SSJ_REST_MIN_MIN;
+    switch (s_row_kind[s_home_sel]) {
+        case SSJ_ROW_START:
+            session_start();
+            return;
+        case SSJ_ROW_MODE:   // 模式切换:行数变化,整页重建
+            s_cfg.mode = (s_cfg.mode == SSJ_MODE_FREE) ? SSJ_MODE_INTERVAL : SSJ_MODE_FREE;
+            home_build();
+            return;
+        case SSJ_ROW_CADENCE:
+            s_cfg.cadence += 2;
+            if (s_cfg.cadence > SSJ_CADENCE_MAX) s_cfg.cadence = SSJ_CADENCE_MIN;
+            break;
+        case SSJ_ROW_DURATION:
+            s_cfg.free_min++;
+            if (s_cfg.free_min > SSJ_FREE_MIN_MAX) s_cfg.free_min = SSJ_FREE_MIN_MIN;
+            break;
+        case SSJ_ROW_CYCLES:
+            s_cfg.cycles++;
+            if (s_cfg.cycles > SSJ_CYCLES_MAX) s_cfg.cycles = SSJ_CYCLES_MIN;
+            break;
+        case SSJ_ROW_RUN:
+            s_cfg.run_min++;
+            if (s_cfg.run_min > SSJ_RUN_MIN_MAX) s_cfg.run_min = SSJ_RUN_MIN_MIN;
+            break;
+        case SSJ_ROW_REST:
+            s_cfg.rest_min++;
+            if (s_cfg.rest_min > SSJ_REST_MIN_MAX) s_cfg.rest_min = SSJ_REST_MIN_MIN;
+            break;
+        default:
+            break;
     }
     home_refresh();
+}
+
+// ---------------------------------------------------------------------------
+// 设置页(音乐 / 闪屏 / 音量 / 返回)
+// ---------------------------------------------------------------------------
+static void set_row_content(int idx, char *name, size_t nlen, char *value, size_t vlen) {
+    switch (idx) {
+        case 0:
+            lv_snprintf(name, (uint32_t)nlen, "音乐");
+            // 开音乐时步频固定 180,直接写进值里,回家页看不到"步频"行时也不困惑。
+            lv_snprintf(value, (uint32_t)vlen, "%s", s_cfg.music ? "开(180)" : "关");
+            break;
+        case 1:
+            lv_snprintf(name, (uint32_t)nlen, "闪屏");
+            lv_snprintf(value, (uint32_t)vlen, "%s",
+                        s_cfg.flash == SSJ_FLASH_OFF ? "关"
+                        : s_cfg.flash == SSJ_FLASH_SOFT ? "柔" : "强");
+            break;
+        case 2:
+            lv_snprintf(name, (uint32_t)nlen, "音量");
+            lv_snprintf(value, (uint32_t)vlen, "%d%%", (int)s_volume);
+            break;
+        default:
+            lv_snprintf(name, (uint32_t)nlen, "返回");
+            lv_snprintf(value, (uint32_t)vlen, "OK");
+            break;
+    }
+}
+
+static void settings_refresh(void) {
+    char name[16], value[32], text[64];
+    for (int i = 0; i < SSJ_SET_ROWS; i++) {
+        set_row_content(i, name, sizeof(name), value, sizeof(value));
+        lv_snprintf(text, sizeof(text), "%s  %s", name, value);
+        lv_label_set_text(s_set_labels[i], text);
+        lv_obj_set_style_bg_color(s_set_rows[i],
+            i == s_set_sel ? lv_color_hex(SSJ_COL_PANEL_SEL) : lv_color_hex(SSJ_COL_PANEL), 0);
+        lv_obj_set_style_text_color(s_set_labels[i],
+            i == s_set_sel ? lv_color_hex(SSJ_COL_ACCENT) : lv_color_hex(SSJ_COL_TEXT), 0);
+    }
+    refresh_battery(s_battery_set);
+}
+
+static void settings_build(void) {
+    if (s_set_scr) {
+        lv_obj_delete(s_set_scr);
+        s_set_scr = NULL;
+    }
+    s_set_sel = 0;
+
+    s_set_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_set_scr, lv_color_hex(SSJ_COL_BG), 0);
+    lv_obj_set_style_border_width(s_set_scr, 0, 0);
+
+    lv_obj_t *title = make_label(s_set_scr, &ssj_font_20, SSJ_COL_ACCENT);
+    lv_label_set_text(title, "设置");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+
+    s_battery_set = make_battery_label(s_set_scr);
+
+    for (int i = 0; i < SSJ_SET_ROWS; i++) {
+        lv_obj_t *panel = lv_obj_create(s_set_scr);
+        lv_obj_remove_style_all(panel);
+        lv_obj_set_size(panel, SSJ_ROW_W, SSJ_ROW_H);
+        lv_obj_set_pos(panel, SSJ_ROW_X, SSJ_ROW_Y0 + i * (SSJ_ROW_H + SSJ_ROW_GAP));
+        lv_obj_set_style_bg_color(panel, lv_color_hex(SSJ_COL_PANEL), 0);
+        lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(panel, 8, 0);
+
+        lv_obj_t *l = make_label(panel, &ssj_font_20, SSJ_COL_TEXT);
+        lv_obj_center(l);
+        s_set_rows[i] = panel;
+        s_set_labels[i] = l;
+    }
+
+    lv_obj_t *hint = make_label(s_set_scr, &ssj_font_20, SSJ_COL_SUB);
+    lv_label_set_text(hint, "OK 调节 · 长按返回");
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+
+    settings_refresh();
+    lv_screen_load(s_set_scr);
+}
+
+// 离开设置页:把改动写回 NVS(音量等),再重建主页。
+static void settings_close(void) {
+    ssj_store_save(&s_cfg);
+    home_build();
+    s_page = SSJ_PAGE_HOME;
+}
+
+static void settings_activate(void) {
+    switch (s_set_sel) {
+        case 0:
+            s_cfg.music = !s_cfg.music;
+            break;
+        case 1:
+            s_cfg.flash = (uint8_t)((s_cfg.flash + 1) % 3);
+            break;
+        case 2:
+            s_volume = (uint8_t)((s_volume >= 100) ? 0 : s_volume + 10);
+            s_cfg.volume = s_volume;   // 一起改配置,离开设置页时随 ssj_store_save 落盘
+            ssj_audio_set_volume(s_volume);
+            break;
+        default:
+            settings_close();
+            return;
+    }
+    settings_refresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -495,6 +657,7 @@ static void app_tick(lv_timer_t *timer) {
         }
         if (ev & SSJ_EV_DONE) {
             ssj_audio_metronome(0, false);
+            ssj_audio_set_music(false, false);
             ssj_audio_play(SSJ_SND_DONE);
             beat_anim_stop();
             done_page_build();
@@ -513,7 +676,13 @@ void ssj_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
 
     switch (s_page) {
         case SSJ_PAGE_HOME:
-            if (ev != BSP_BTN_CLICK) return;   // 主页不响应长按
+            if (btn == BSP_BTN_OK && ev == BSP_BTN_LONG) {
+                // 长按 OK:进设置页(音乐/闪屏/音量)
+                settings_build();
+                s_page = SSJ_PAGE_SETTINGS;
+                return;
+            }
+            if (ev != BSP_BTN_CLICK) return;   // 其余长按不响应
             if (btn == BSP_BTN_UP) {
                 s_home_sel = (s_home_sel + s_row_count - 1) % s_row_count;
                 home_refresh();
@@ -525,11 +694,29 @@ void ssj_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             }
             break;
 
+        case SSJ_PAGE_SETTINGS:
+            if (btn == BSP_BTN_OK && ev == BSP_BTN_LONG) {
+                settings_close();
+                return;
+            }
+            if (ev != BSP_BTN_CLICK) return;
+            if (btn == BSP_BTN_UP) {
+                s_set_sel = (s_set_sel + SSJ_SET_ROWS - 1) % SSJ_SET_ROWS;
+                settings_refresh();
+            } else if (btn == BSP_BTN_DOWN) {
+                s_set_sel = (s_set_sel + 1) % SSJ_SET_ROWS;
+                settings_refresh();
+            } else if (btn == BSP_BTN_OK) {
+                settings_activate();
+            }
+            break;
+
         case SSJ_PAGE_RUN:
             if (btn == BSP_BTN_OK && ev == BSP_BTN_LONG) {
                 // 长按结束:收账并进入完成页
                 ssj_session_finish(&s_sess);
                 ssj_audio_metronome(0, false);
+                ssj_audio_set_music(false, false);
                 ssj_audio_play(SSJ_SND_DONE);
                 beat_anim_stop();
                 done_page_build();
@@ -538,11 +725,13 @@ void ssj_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 if (s_sess.state == SSJ_RUNNING) {
                     ssj_session_pause(&s_sess, esp_timer_get_time());
                     ssj_audio_metronome(0, false);
+                    ssj_audio_set_music(false, false);   // 暂停=音乐停,继续时原地续播
                 } else if (s_sess.state == SSJ_PAUSED) {
                     ssj_session_resume(&s_sess, esp_timer_get_time());
                     ssj_audio_metronome(60000u / (uint32_t)s_sess.cfg.cadence, true);
                     ssj_audio_tick_pitch(s_sess.cfg.mode == SSJ_MODE_INTERVAL
                                              && s_sess.phase == SSJ_PHASE_REST);
+                    ssj_audio_set_music(s_cfg.music, false);
                 }
                 run_page_refresh(true);
             } else if (ev == BSP_BTN_CLICK && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN)) {
@@ -561,6 +750,9 @@ void ssj_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
 
         case SSJ_PAGE_DONE:
             if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) {
+                // 音量可能在运行页调过:回主页时一并落盘,避免每次调音量都写 NVS。
+                s_cfg.volume = s_volume;
+                ssj_store_save(&s_cfg);
                 home_build();
                 s_page = SSJ_PAGE_HOME;
             }
@@ -574,6 +766,56 @@ void ssj_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
 // ---------------------------------------------------------------------------
 // 应用入口
 // ---------------------------------------------------------------------------
+// 自检固件(SSJ_SELFTEST=ON):开机 2 秒后自动开始一次会话,不需要按键。
+// 用于在没有人工按键的情况下验证音乐流、节拍与闪屏链路;发布固件不含。
+#ifdef SSJ_SELFTEST
+static uint32_t s_st_start_ms;
+static int s_st_step;
+
+// 自检脚本:开始 → 20s 暂停 → 24s 继续(音乐原地续播)→ 30s 结束(完成音)。
+static void selftest_seq(lv_timer_t *t) {
+    const uint32_t el = lv_tick_get() - s_st_start_ms;
+    if (s_st_step == 0 && el >= 20000) {
+        s_st_step = 1;
+        ssj_session_pause(&s_sess, esp_timer_get_time());
+        ssj_audio_metronome(0, false);
+        ssj_audio_set_music(false, false);
+        run_page_refresh(true);
+        ESP_LOGW(TAG, "SELFTEST: 暂停");
+    } else if (s_st_step == 1 && el >= 24000) {
+        s_st_step = 2;
+        ssj_session_resume(&s_sess, esp_timer_get_time());
+        ssj_audio_metronome(60000u / (uint32_t)s_sess.cfg.cadence, true);
+        ssj_audio_set_music(true, false);
+        run_page_refresh(true);
+        ESP_LOGW(TAG, "SELFTEST: 继续");
+    } else if (s_st_step == 2 && el >= 30000) {
+        s_st_step = 3;
+        ssj_session_finish(&s_sess);
+        ssj_audio_metronome(0, false);
+        ssj_audio_set_music(false, false);
+        ssj_audio_play(SSJ_SND_DONE);
+        beat_anim_stop();
+        done_page_build();
+        s_page = SSJ_PAGE_DONE;
+        ESP_LOGW(TAG, "SELFTEST: 结束");
+        lv_timer_del(t);
+    }
+}
+
+static void selftest_autostart(lv_timer_t *t) {
+    lv_timer_del(t);
+    ESP_LOGW(TAG, "SELFTEST: 自动开始会话");
+    s_cfg.music = true;
+    s_cfg.flash = SSJ_FLASH_STRONG;
+    s_cfg.mode = SSJ_MODE_FREE;
+    s_cfg.free_min = 1;   // 1 分钟足够观察
+    session_start();
+    s_st_start_ms = lv_tick_get();
+    lv_timer_create(selftest_seq, 200, NULL);
+}
+#endif
+
 void ssj_app_init(void) {
     // 调用前提:bsp_display_init/bsp_lvgl_init 已成功,且本函数在 LVGL 锁内执行。
     s_page = SSJ_PAGE_HOME;
@@ -582,14 +824,21 @@ void ssj_app_init(void) {
     if (!ssj_store_load(&s_cfg)) {
         ESP_LOGI(TAG, "使用默认超慢跑配置(180 步/分)");
     }
+    s_volume = s_cfg.volume;
 
     // 音频失败不阻塞:应用无声运行(节拍可视化仍在)。
     if (!ssj_audio_start()) {
         ESP_LOGW(TAG, "音频不可用,无声运行");
+    } else {
+        ssj_audio_set_volume(s_volume);
     }
 
     // 会话计时主循环:100ms 周期,在 LVGL 任务上下文执行,无需持锁。
     s_tick_timer = lv_timer_create(app_tick, 100, NULL);
+
+#ifdef SSJ_SELFTEST
+    lv_timer_create(selftest_autostart, 2000, NULL);
+#endif
 
     home_build();
 }

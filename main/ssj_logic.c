@@ -28,6 +28,14 @@ void ssj_config_clamp(ssj_config_t *cfg) {
     cfg->cycles = clampi(cfg->cycles, SSJ_CYCLES_MIN, SSJ_CYCLES_MAX);
     cfg->run_min = clampi(cfg->run_min, SSJ_RUN_MIN_MIN, SSJ_RUN_MIN_MAX);
     cfg->rest_min = clampi(cfg->rest_min, SSJ_REST_MIN_MIN, SSJ_REST_MIN_MAX);
+    cfg->flash = (uint8_t)clampi((int)cfg->flash, SSJ_FLASH_OFF, SSJ_FLASH_STRONG);
+    cfg->volume = (uint8_t)clampi((int)cfg->volume, 0, 100);
+}
+
+int ssj_config_cadence(const ssj_config_t *cfg) {
+    if (!cfg) return SSJ_CADENCE_DEFAULT;
+    return cfg->music ? SSJ_MUSIC_CADENCE
+                      : clampi(cfg->cadence, SSJ_CADENCE_MIN, SSJ_CADENCE_MAX);
 }
 
 // ---------------------------------------------------------------------------
@@ -45,6 +53,9 @@ void ssj_session_init(ssj_session_t *s, const ssj_config_t *cfg) {
     safe.rest_min = SSJ_REST_MIN_DEFAULT;
     if (cfg) safe = *cfg;
     ssj_config_clamp(&safe);
+    // 会话内步频由音乐速度或用户设置决定:统一在入口处定死,
+    // 之后 session 的步数换算只读 cfg.cadence,不再关心音乐开关。
+    safe.cadence = ssj_config_cadence(&safe);
 
     s->cfg = safe;
     s->state = SSJ_IDLE;
