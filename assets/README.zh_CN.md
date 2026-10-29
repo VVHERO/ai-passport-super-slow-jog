@@ -15,6 +15,36 @@
 - 添加字库前评估 Flash 与内部 RAM 影响；ESP32-C3 无 PSRAM。
 - 不提交许可不允许分发的字库。
 
+超慢跑应用（`main/ssj_app.c`）使用以下素材：
+
+| 文件 | 说明 |
+| --- | --- |
+| `fonts/SourceHanSansCN-Regular.otf` | 思源黑体 CN Regular 源字体，仅用于本地生成字体子集，不编译进固件。来源 [adobe-fonts/source-han-sans](https://github.com/adobe-fonts/source-han-sans)（release 分支 SubsetOTF/CN），SIL Open Font License 1.1，允许再分发。 |
+| `fonts/ssj_symbols.txt` | 超慢跑 UI 实际文案锁定的 CJK 字符清单（57 字）。修改文案后须同步更新并重新生成。 |
+| `fonts/ssj_font_20.c` | 20px 正文子集：ASCII 0x20-0x7E + U+00B7 中间点 + 全角逗号/句号 + 上述 57 个汉字，4bpp 未压缩，约 126KB Flash。编译进固件，供 `main/ssj_app.c` 全部文案使用。 |
+| `fonts/ssj_font_48.c` | 48px 大字子集：ASCII 0x20-0x7E（数字/冒号/百分号计时显示），4bpp 未压缩，约 222KB Flash。 |
+
+生成命令（lv_font_conv，仓库根目录执行；转换器版本以 `npx lv_font_conv@<版本>` 锁定）：
+
+```bash
+npx lv_font_conv \
+  --font assets/fonts/SourceHanSansCN-Regular.otf \
+  --range 0x20-0x7E,0xB7,0xFF0C,0x3002 \
+  --symbols "$(cat assets/fonts/ssj_symbols.txt)" \
+  --size 20 --bpp 4 --format lvgl --no-compress \
+  --lv-font-name ssj_font_20 --lv-include lvgl.h \
+  --output assets/fonts/ssj_font_20.c
+
+npx lv_font_conv \
+  --font assets/fonts/SourceHanSansCN-Regular.otf \
+  --range 0x20-0x7E \
+  --size 48 --bpp 4 --format lvgl --no-compress \
+  --lv-font-name ssj_font_48 --lv-include lvgl.h \
+  --output assets/fonts/ssj_font_48.c
+```
+
+码点覆盖由 `tests/test_ssj_font_coverage.py`（静态门禁一部分）自动校验：UI 文案出现清单外汉字、或清单字符未被生成命令采用时直接失败。
+
 ## 图片（images）
 
 可复用的源图与生成的显示资产放在 `images/`。
