@@ -21,6 +21,7 @@
 | --- | --- |
 | `fonts/SourceHanSansCN-Regular.otf` | 思源黑体 CN Regular 源字体，仅用于本地生成字体子集，不编译进固件。来源 [adobe-fonts/source-han-sans](https://github.com/adobe-fonts/source-han-sans)（release 分支 SubsetOTF/CN），SIL Open Font License 1.1，允许再分发。 |
 | `fonts/ssj_symbols.txt` | 超慢跑 UI 实际文案锁定的 CJK 字符清单（57 字）。修改文案后须同步更新并重新生成。 |
+| `fonts/LICENSE.txt` | 上述源字体的 SIL Open Font License 1.1 全文（Adobe 版权声明），随源字体一同分发。 |
 | `fonts/ssj_font_20.c` | 20px 正文子集：ASCII 0x20-0x7E + U+00B7 中间点 + 全角逗号/句号 + 上述 57 个汉字，4bpp 未压缩，约 126KB Flash。编译进固件，供 `main/ssj_app.c` 全部文案使用。 |
 | `fonts/ssj_font_48.c` | 48px 大字子集：ASCII 0x20-0x7E（数字/冒号/百分号计时显示），4bpp 未压缩，约 222KB Flash。 |
 
