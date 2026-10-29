@@ -17,6 +17,35 @@ Store reusable font files and generated font sources in `fonts/`.
 - Check Flash and internal-RAM impact before adding a font; the ESP32-C3 has no PSRAM.
 - Do not commit fonts whose license does not permit redistribution.
 
+The Super Slow Jog app (`main/ssj_app.c`) uses the following assets:
+
+| File | Description |
+| --- | --- |
+| `fonts/SourceHanSansCN-Regular.otf` | Source Han Sans CN Regular source font, used only to generate the subsets locally and not compiled into the firmware. Source: [adobe-fonts/source-han-sans](https://github.com/adobe-fonts/source-han-sans) (release branch, SubsetOTF/CN), SIL Open Font License 1.1, redistribution permitted. |
+| `fonts/LICENSE.txt` | Full text of the SIL Open Font License 1.1 covering that source font (Adobe copyright notice), distributed alongside it. |
+| `fonts/ssj_symbols.txt` | CJK character inventory locked to the actual UI strings (57 characters). Update it and regenerate whenever the copy changes. |
+| `fonts/ssj_font_20.c` | 20 px body subset: ASCII 0x20-0x7E + U+00B7 middle dot + full-width comma and period + the 57 characters above, 4 bpp uncompressed, about 126 KB of Flash. Compiled into the firmware and used for all copy in `main/ssj_app.c`. |
+| `fonts/ssj_font_48.c` | 48 px large subset: ASCII 0x20-0x7E (digits, colon and percent for the timer), 4 bpp uncompressed, about 222 KB of Flash. |
+
+Generation commands (lv_font_conv, run from the repository root; pin the converter version with `npx lv_font_conv@<version>`):
+
+```bash
+npx lv_font_conv \
+  --font assets/fonts/SourceHanSansCN-Regular.otf \
+  --range 0x20-0x7E,0xB7,0xFF0C,0x3002 \
+  --symbols "$(cat assets/fonts/ssj_symbols.txt)" \
+  --size 20 --bpp 4 --format lvgl --no-compress \
+  --lv-font-name ssj_font_20 --lv-include lvgl.h \
+  --output assets/fonts/ssj_font_20.c
+
+npx lv_font_conv \
+  --font assets/fonts/SourceHanSansCN-Regular.otf \
+  --range 0x20-0x7E \
+  --size 48 --bpp 4 --format lvgl --no-compress \
+  --lv-font-name ssj_font_48 --lv-include lvgl.h \
+  --output assets/fonts/ssj_font_48.c
+```
+
 ## Images
 
 Store reusable source images and generated display assets in `images/`.
