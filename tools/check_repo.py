@@ -32,8 +32,16 @@ ROOT_MARKDOWN_ALLOWLIST = {
     "CLAUDE.md",
     "CLAUDE.zh_CN.md",
     "README.md",
-    "README.zh_CN.md",
+    "README.en.md",
 }
+# The root README is fork-owned, not an upstream document: docs/fork-guide.zh_CN.md
+# reserves it for the fork developer ("为什么根目录不放置 README"). This fork is
+# published to a Chinese-speaking audience, so the default document leads with
+# Simplified Chinese and the English text is kept as a linked peer. Everything
+# below still holds those two files to the same link and secret rules.
+FORK_ROOT_README = ROOT / "README.md"
+FORK_ROOT_README_ENGLISH = ROOT / "README.en.md"
+FORK_ROOT_README_ENGLISH_NAME = FORK_ROOT_README_ENGLISH.name
 # Register only concrete, vendored component directories, e.g. "components/foo".
 # These exemptions never change the input to sensitive-content/conflict checks.
 VENDORED_DOC_ROOTS: tuple[str, ...] = ()
@@ -217,6 +225,26 @@ def check_document_languages(
         name = path.name
         text = path.read_text(encoding="utf-8")
         opening = "\n".join(text.splitlines()[:8])
+
+        if path == FORK_ROOT_README:
+            if not FORK_ROOT_README_ENGLISH.exists():
+                errors.append(
+                    f"README.md: fork root README must ship an English peer "
+                    f"{FORK_ROOT_README_ENGLISH_NAME}"
+                )
+            elif FORK_ROOT_README_ENGLISH_NAME not in opening:
+                errors.append(
+                    "README.md: missing top language link to "
+                    f"{FORK_ROOT_README_ENGLISH_NAME}"
+                )
+            continue
+
+        if path == FORK_ROOT_README_ENGLISH:
+            if not FORK_ROOT_README.exists() or "README.md" not in opening:
+                errors.append(
+                    f"{FORK_ROOT_README_ENGLISH_NAME}: missing top language link to README.md"
+                )
+            continue
 
         if name.endswith(".zh_CN.md"):
             default_name = f"{name[:-len('.zh_CN.md')]}.md"
