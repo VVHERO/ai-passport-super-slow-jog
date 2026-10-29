@@ -96,6 +96,14 @@ static lv_obj_t *s_battery_done;
 // lv_timer 句柄(应用主循环,页面切换时不销毁)
 static lv_timer_t *s_tick_timer;
 
+// 节拍点动画是否在跑。自己记状态,不用 lv_anim_count_running():
+// 那是全局计数,任何其他动画都会让它非 0,导致节拍动画永远不重启。
+static bool s_beat_anim_on;
+
+// 前置声明(主页启动会话时要切到运行页,运行页构建又要立刻重绘一次)
+static void run_page_build(void);
+static void run_page_refresh(bool force);
+
 // ---------------------------------------------------------------------------
 // 小工具
 // ---------------------------------------------------------------------------
@@ -277,23 +285,31 @@ static void home_activate(void) {
 // 运行页
 // ---------------------------------------------------------------------------
 // 节拍脉冲动画:点的不透明度 255 -> 70 -> 255,一个来回 = 两个节拍间隔。
+// 动画执行回调必须是 (void *var, int32_t v) 两参数签名;不能直接把
+// lv_obj_set_style_opa 强转进来(它需要第三个 selector 参数,强转会传进野值)。
+static void beat_opa_exec(void *var, int32_t v) {
+    lv_obj_set_style_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
+}
+
 static void beat_anim_start(void) {
-    if (!s_beat_dot) return;
+    if (!s_beat_dot || s_beat_anim_on) return;
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_beat_dot);
-    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+    lv_anim_set_exec_cb(&a, beat_opa_exec);
     lv_anim_set_values(&a, LV_OPA_COVER, 70);
     uint32_t period_ms = 60000u / (uint32_t)s_sess.cfg.cadence;
     lv_anim_set_duration(&a, period_ms);
     lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
     lv_anim_set_playback_duration(&a, period_ms);
     lv_anim_start(&a);
+    s_beat_anim_on = true;
 }
 
 static void beat_anim_stop(void) {
-    lv_anim_delete(s_beat_dot, NULL);
+    if (s_beat_dot) lv_anim_delete(s_beat_dot, beat_opa_exec);
     if (s_beat_dot) lv_obj_set_style_opa(s_beat_dot, LV_OPA_COVER, 0);
+    s_beat_anim_on = false;
 }
 
 // 音量提示浮层:1.2s 后自动隐藏。
@@ -313,6 +329,7 @@ static void toast_show(const char *text) {
 }
 
 void run_page_build(void) {
+    s_beat_anim_on = false;   // 旧对象随旧屏幕一起销毁,动画状态归零
     if (s_run_scr) lv_obj_delete(s_run_scr);
     s_run_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_run_scr, lv_color_hex(SSJ_COL_BG), 0);
@@ -356,6 +373,7 @@ void run_page_build(void) {
     lv_obj_set_style_bg_opa(s_toast, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(s_toast, 8, 0);
     lv_obj_set_style_radius(s_toast, 8, 0);
+    lv_obj_align(s_toast, LV_ALIGN_BOTTOM_MID, 0, -40);
     lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
 
     lv_screen_load(s_run_scr);
@@ -419,7 +437,7 @@ static void run_page_refresh(bool force) {
         lv_obj_set_style_bg_color(s_beat_dot, lv_color_hex(SSJ_COL_WARN), 0);
     } else {
         lv_obj_set_style_bg_color(s_beat_dot, lv_color_hex(phase_color), 0);
-        if (lv_anim_count_running() == 0) beat_anim_start();
+        beat_anim_start();   // 内部自带"已在跑就不重启"判断
     }
 
     refresh_battery(s_battery_run);
