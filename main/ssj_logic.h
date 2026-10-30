@@ -45,6 +45,16 @@ typedef enum {
 
 #define SSJ_VOLUME_DEFAULT 60     // 出厂音量 60%(运行页 UP/DOWN 每次调 10%)
 
+// 心率区间:按最大心率的百分比分档,决定运行页数字的颜色。
+// 默认 190 ≈ 220 − 30 岁;用户可在设置页按自己的最大心率调整(步进 5)。
+#define SSJ_HR_MAX_MIN 150
+#define SSJ_HR_MAX_MAX 210
+#define SSJ_HR_MAX_STEP 5
+#define SSJ_HR_MAX_DEFAULT 190
+#define SSJ_HR_ZONE_LOW 60    // < 60% 偏低(蓝)
+#define SSJ_HR_ZONE_OK 70     // 60–70% 目标区(绿);70–80% 偏高(橙)
+#define SSJ_HR_ZONE_HIGH 80   // >= 80% 高(红)
+
 #define SSJ_CADENCE_DEFAULT 180   // 超慢跑经典步频
 #define SSJ_FREE_MIN_DEFAULT 15   // 自由跑默认 15 分钟
 #define SSJ_CYCLES_DEFAULT 5      // 间歇默认 5 组
@@ -61,6 +71,8 @@ typedef struct {
     bool music;        // 伴跑音乐:开时本次会话步频固定为 SSJ_MUSIC_CADENCE
     uint8_t flash;     // 屏幕随拍闪烁档位:SSJ_FLASH_OFF / SOFT / STRONG
     uint8_t volume;    // 输出音量 0..100(%)
+    bool hr_enabled;   // 从 BLE 心率传感器读实时心率(默认关,省电)
+    int hr_max;        // 最大心率(用于分区间着色),[150,210]
 } ssj_config_t;
 
 // 本次会话实际生效的步频:开音乐时由音乐速度决定(180),否则用用户设置值。

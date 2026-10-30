@@ -14,6 +14,7 @@
 #include "ssj_app.h"
 
 #include "ssj_audio.h"
+#include "ssj_hr.h"
 #include "ssj_logic.h"
 #include "ssj_store.h"
 
@@ -39,7 +40,8 @@ static const char *TAG = "ssj_app";
 #define SSJ_COL_SUB 0x8A97A8      // 次级文字
 #define SSJ_COL_ACCENT 0x4CC38A   // 强调/跑步:运动绿
 #define SSJ_COL_REST 0x4C9AFF     // 休息:蓝
-#define SSJ_COL_WARN 0xFFB454     // 暂停:暖橙
+#define SSJ_COL_WARN 0xFFB454     // 暂停 / 心率偏高:暖橙
+#define SSJ_COL_HOT 0xFF5A5A      // 心率过高:红
 
 // 字体(assets/fonts 生成的子集,见 lvgl-chinese-fonts 指南)。
 LV_FONT_DECLARE(ssj_font_20);   // 正文:中文 + ASCII
@@ -66,8 +68,8 @@ typedef enum {
     SSJ_ROW_START,
 } ssj_row_t;
 
-// 设置页行数(音乐 / 闪屏 / 音量 / 返回)。
-#define SSJ_SET_ROWS 4
+// 设置页行数(音乐 / 闪屏 / 音量 / 心率 / 心率上限 / 返回)。
+#define SSJ_SET_ROWS 6
 
 // ---------------------------------------------------------------------------
 // 应用状态(全部仅在 LVGL 上下文访问)
@@ -111,6 +113,7 @@ static lv_obj_t *s_hint_label;      // 底部按键提示
 static lv_obj_t *s_toast;           // 音量提示浮层
 static lv_timer_t *s_toast_timer;   // 浮层自动隐藏
 static lv_obj_t *s_battery_run;
+static lv_obj_t *s_hr_label;        // 心率(左上角,按区间变色;关闭心率时隐藏)
 
 // 完成页对象
 static lv_obj_t *s_done_scr;
@@ -128,6 +131,7 @@ static bool s_beat_anim_on;
 // 前置声明(主页启动会话时要切到运行页,运行页构建又要立刻重绘一次)
 static void run_page_build(void);
 static void run_page_refresh(bool force);
+static void run_page_refresh_hr(void);
 
 // ---------------------------------------------------------------------------
 // 小工具
@@ -296,6 +300,8 @@ static void session_start(void) {
     ssj_audio_metronome(60000u / (uint32_t)ssj_config_cadence(&s_cfg), true);
     ssj_audio_tick_pitch(false);
     ssj_audio_set_music(s_cfg.music, true);   // 新会话从素材开头播
+    // 心率:开了才启动 BLE(懒初始化),会话结束后关掉省电。
+    if (s_cfg.hr_enabled) ssj_hr_set_enabled(true);
     s_page = SSJ_PAGE_RUN;
 }
 
@@ -336,7 +342,7 @@ static void home_activate(void) {
 }
 
 // ---------------------------------------------------------------------------
-// 设置页(音乐 / 闪屏 / 音量 / 返回)
+// 设置页(音乐 / 闪屏 / 音量 / 心率 / 心率上限 / 返回)
 // ---------------------------------------------------------------------------
 static void set_row_content(int idx, char *name, size_t nlen, char *value, size_t vlen) {
     switch (idx) {
@@ -354,6 +360,15 @@ static void set_row_content(int idx, char *name, size_t nlen, char *value, size_
         case 2:
             lv_snprintf(name, (uint32_t)nlen, "音量");
             lv_snprintf(value, (uint32_t)vlen, "%d%%", (int)s_volume);
+            break;
+        case 3:
+            lv_snprintf(name, (uint32_t)nlen, "心率");
+            lv_snprintf(value, (uint32_t)vlen, "%s", s_cfg.hr_enabled ? "开" : "关");
+            break;
+        case 4:
+            // 最大心率决定运行页心率数字的配色区间,也写进值里方便当场对照。
+            lv_snprintf(name, (uint32_t)nlen, "心率上限");
+            lv_snprintf(value, (uint32_t)vlen, "%d", s_cfg.hr_max);
             break;
         default:
             lv_snprintf(name, (uint32_t)nlen, "返回");
@@ -436,6 +451,13 @@ static void settings_activate(void) {
             s_cfg.volume = s_volume;   // 一起改配置,离开设置页时随 ssj_store_save 落盘
             ssj_audio_set_volume(s_volume);
             break;
+        case 3:
+            s_cfg.hr_enabled = !s_cfg.hr_enabled;
+            break;
+        case 4:
+            s_cfg.hr_max += SSJ_HR_MAX_STEP;
+            if (s_cfg.hr_max > SSJ_HR_MAX_MAX) s_cfg.hr_max = SSJ_HR_MAX_MIN;
+            break;
         default:
             settings_close();
             return;
@@ -499,6 +521,12 @@ void run_page_build(void) {
 
     s_battery_run = make_battery_label(s_run_scr);
 
+    // 心率(左上角)。关闭心率功能时整块隐藏,不占视线。
+    s_hr_label = make_label(s_run_scr, &ssj_font_20, SSJ_COL_SUB);
+    lv_obj_align(s_hr_label, LV_ALIGN_TOP_LEFT, 10, 6);
+    lv_label_set_text(s_hr_label, "");
+    lv_obj_add_flag(s_hr_label, LV_OBJ_FLAG_HIDDEN);
+
     // 阶段名
     s_phase_label = make_label(s_run_scr, &ssj_font_20, SSJ_COL_ACCENT);
     lv_obj_align(s_phase_label, LV_ALIGN_TOP_MID, 0, 34);
@@ -540,6 +568,56 @@ void run_page_build(void) {
 
     lv_screen_load(s_run_scr);
     run_page_refresh(true);
+}
+
+// 心率数字按「占最大心率的百分比」分四档着色:
+//   < 60% 蓝(偏低) / 60–70% 绿(超慢跑目标区) / 70–80% 橙(偏高) / >= 80% 红(高)
+static uint32_t hr_zone_color(int bpm) {
+    const int hr_max = (s_cfg.hr_max > 0) ? s_cfg.hr_max : SSJ_HR_MAX_DEFAULT;
+    const int pct = (bpm * 100) / hr_max;
+    if (pct < SSJ_HR_ZONE_LOW) return SSJ_COL_REST;
+    if (pct < SSJ_HR_ZONE_OK) return SSJ_COL_ACCENT;
+    if (pct < SSJ_HR_ZONE_HIGH) return SSJ_COL_WARN;
+    return SSJ_COL_HOT;
+}
+
+// 心率一行:关闭时隐藏;没数据时显示「--」;有数据时显示数值并着色。
+// LVGL 重绘有成本,所以只在文字/颜色变化时才 set,不在每个 tick 无脑刷。
+static void run_page_refresh_hr(void) {
+    if (!s_hr_label) return;
+    static int last_bpm = -1;
+    static uint32_t last_color = 0xFFFFFFFFu;
+
+    if (!s_cfg.hr_enabled) {
+        if (!lv_obj_has_flag(s_hr_label, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_add_flag(s_hr_label, LV_OBJ_FLAG_HIDDEN);
+        }
+        last_bpm = -1;
+        return;
+    }
+    if (lv_obj_has_flag(s_hr_label, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_remove_flag(s_hr_label, LV_OBJ_FLAG_HIDDEN);
+        last_bpm = -1;
+    }
+
+    int bpm = 0;
+    int64_t age_ms = 0;
+    if (ssj_hr_latest(&bpm, &age_ms)) {
+        const uint32_t color = hr_zone_color(bpm);
+        if (bpm != last_bpm) {
+            lv_label_set_text_fmt(s_hr_label, "心率 %d", bpm);
+            last_bpm = bpm;
+        }
+        if (color != last_color) {
+            lv_obj_set_style_text_color(s_hr_label, lv_color_hex(color), 0);
+            last_color = color;
+        }
+    } else if (last_bpm != 0) {
+        lv_label_set_text(s_hr_label, "心率 --");
+        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(SSJ_COL_SUB), 0);
+        last_bpm = 0;
+        last_color = SSJ_COL_SUB;
+    }
 }
 
 // 运行页重绘。force=true 时全部刷新;否则只在秒变化时更新时间/步数,省 SPI 带宽。
@@ -602,6 +680,9 @@ static void run_page_refresh(bool force) {
         beat_anim_start();   // 内部自带"已在跑就不重启"判断
     }
 
+    // 心率:开启时显示「心率 82」并按区间变色;没数据时显示「--」。
+    run_page_refresh_hr();
+
     refresh_battery(s_battery_run);
 }
 
@@ -658,6 +739,7 @@ static void app_tick(lv_timer_t *timer) {
         if (ev & SSJ_EV_DONE) {
             ssj_audio_metronome(0, false);
             ssj_audio_set_music(false, false);
+            ssj_hr_set_enabled(false);   // 会话结束:停掉 BLE,省电
             ssj_audio_play(SSJ_SND_DONE);
             beat_anim_stop();
             done_page_build();
@@ -717,6 +799,7 @@ void ssj_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 ssj_session_finish(&s_sess);
                 ssj_audio_metronome(0, false);
                 ssj_audio_set_music(false, false);
+                ssj_hr_set_enabled(false);
                 ssj_audio_play(SSJ_SND_DONE);
                 beat_anim_stop();
                 done_page_build();
@@ -772,9 +855,19 @@ void ssj_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
 static uint32_t s_st_start_ms;
 static int s_st_step;
 
-// 自检脚本:开始 → 20s 暂停 → 24s 继续(音乐原地续播)→ 30s 结束(完成音)。
+// 自检脚本:开始 → 20s 暂停 → 24s 继续(音乐原地续播)→ 300s 结束(完成音)。
+// 5 分钟窗口是留给 BLE 心率联调的:扫描 → 连接 → 订阅 → 连续读数都要时间。
 static void selftest_seq(lv_timer_t *t) {
     const uint32_t el = lv_tick_get() - s_st_start_ms;
+    static uint32_t last_hr_log;
+    if (el - last_hr_log >= 2000) {
+        last_hr_log = el;
+        int bpm = 0;
+        int64_t age = 0;
+        const bool ok = ssj_hr_latest(&bpm, &age);
+        ESP_LOGI(TAG, "SELFTEST hr state=%d bpm=%d age=%lldms", (int)ssj_hr_state(),
+                 ok ? bpm : -1, ok ? (long long)age : -1LL);
+    }
     if (s_st_step == 0 && el >= 20000) {
         s_st_step = 1;
         ssj_session_pause(&s_sess, esp_timer_get_time());
@@ -789,11 +882,12 @@ static void selftest_seq(lv_timer_t *t) {
         ssj_audio_set_music(true, false);
         run_page_refresh(true);
         ESP_LOGW(TAG, "SELFTEST: 继续");
-    } else if (s_st_step == 2 && el >= 30000) {
+    } else if (s_st_step == 2 && el >= 300000) {
         s_st_step = 3;
         ssj_session_finish(&s_sess);
         ssj_audio_metronome(0, false);
         ssj_audio_set_music(false, false);
+        ssj_hr_set_enabled(false);
         ssj_audio_play(SSJ_SND_DONE);
         beat_anim_stop();
         done_page_build();
@@ -809,7 +903,8 @@ static void selftest_autostart(lv_timer_t *t) {
     s_cfg.music = true;
     s_cfg.flash = SSJ_FLASH_STRONG;
     s_cfg.mode = SSJ_MODE_FREE;
-    s_cfg.free_min = 1;   // 1 分钟足够观察
+    s_cfg.free_min = 5;        // 5 分钟:留够时间在手表那边操作
+    s_cfg.hr_enabled = true;   // 自检也把心率链路带上
     session_start();
     s_st_start_ms = lv_tick_get();
     lv_timer_create(selftest_seq, 200, NULL);

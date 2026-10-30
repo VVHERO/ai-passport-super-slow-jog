@@ -30,6 +30,9 @@ void ssj_config_clamp(ssj_config_t *cfg) {
     cfg->rest_min = clampi(cfg->rest_min, SSJ_REST_MIN_MIN, SSJ_REST_MIN_MAX);
     cfg->flash = (uint8_t)clampi((int)cfg->flash, SSJ_FLASH_OFF, SSJ_FLASH_STRONG);
     cfg->volume = (uint8_t)clampi((int)cfg->volume, 0, 100);
+    // 0 = 没有设置过(旧 NVS / 全零配置),回落到默认最大心率而不是下限 150。
+    if (cfg->hr_max <= 0) cfg->hr_max = SSJ_HR_MAX_DEFAULT;
+    cfg->hr_max = clampi(cfg->hr_max, SSJ_HR_MAX_MIN, SSJ_HR_MAX_MAX);
 }
 
 int ssj_config_cadence(const ssj_config_t *cfg) {
@@ -51,6 +54,7 @@ void ssj_session_init(ssj_session_t *s, const ssj_config_t *cfg) {
     safe.cycles = SSJ_CYCLES_DEFAULT;
     safe.run_min = SSJ_RUN_MIN_DEFAULT;
     safe.rest_min = SSJ_REST_MIN_DEFAULT;
+    safe.hr_max = SSJ_HR_MAX_DEFAULT;
     if (cfg) safe = *cfg;
     ssj_config_clamp(&safe);
     // 会话内步频由音乐速度或用户设置决定:统一在入口处定死,

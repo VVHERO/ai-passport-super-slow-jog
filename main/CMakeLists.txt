@@ -19,6 +19,7 @@ idf_component_register(
          "ssj_logic.c"
          "ssj_store.c"
          "ssj_audio.c"
+         "ssj_hr.c"
          "ssj_app.c"
          "demo_navigation.c"
          "ui_pixel.c"

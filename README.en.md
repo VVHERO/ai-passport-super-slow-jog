@@ -33,6 +33,15 @@ Cadence is adjustable from **120 to 200 steps per minute**, +2 per press, wrappi
 
 The settings screen offers `off / soft / strong`: on every beat the whole display dims briefly (45% brightness on soft, 8% on strong, restored after about 110 ms), so you can follow the rhythm out of the corner of your eye. Soft is the default; strong is the full light/dark blink.
 
+## Heart rate (optional, off by default)
+
+- Reads the standard BLE Heart Rate Service directly — Amazfit Balance's "Heart Rate Push" or any common chest strap, no phone app involved
+- Turn "Heart rate" on in settings; when a session starts the device scans and connects by itself and shows `心率 82` in the top-left corner of the run screen
+- The number is coloured by percentage of maximum heart rate: **blue** (< 60%, too easy), **green** (60–70%, the super-slow-jogging zone), **orange** (70–80%, drifting high), **red** (≥ 80%, high)
+- Maximum heart rate defaults to 190 (≈ 220 − 30 years); the settings screen has "Max HR" (150–210, step 5) if yours differs
+- On the watch side, heart rate push must be switched on first; some models only actually broadcast during a workout
+- Reconnects automatically (rescan after 3 s); when nothing is found it scans for 8 s and then idles for 25 s so it does not drain the battery, and it switches off when the session ends
+
 ## Screens
 
 | Run screen | Home screen |
@@ -50,9 +59,9 @@ Top to bottom on the run screen: the current phase (running / resting / paused),
 - OK on the "Start" row: begin the session
 - Hold OK (about half a second): open the settings screen
 
-**Settings screen** (music / screen flash / volume / back)
+**Settings screen** (music / screen flash / volume / heart rate / max HR / back)
 
-- Up / Down to move, OK to change the selected item: music on or off, screen flash `off → soft → strong`, volume 0–100% in steps of 10
+- Up / Down to move, OK to change the selected item: music on or off, screen flash `off → soft → strong`, volume 0–100% in steps of 10, heart rate on or off, max heart rate 150–210 in steps of 5
 - OK on "Back", or hold OK anywhere, saves and returns to the home screen
 
 **While running**
@@ -127,6 +136,7 @@ main/
   ssj_logic.{c,h}    pure C state machine, no hardware dependency, host-testable
   ssj_app.{c,h}      LVGL UI (home / run / result / settings) and the beat pulse animation
   ssj_audio.{c,h}    metronome synthesis, music streaming and beat-synced screen flash
+  ssj_hr.{c,h}       BLE heart rate: CENTRAL scan / connect / subscribe to HRS, auto-reconnect
   ssj_store.{c,h}    NVS persistence of settings
   main.c             boot, key queue, LVGL locking
 assets/fonts/        Source Han Sans subset (SIL OFL 1.1) and its licence
@@ -140,6 +150,8 @@ The state machine is fully decoupled from the UI, audio and storage layers: `ssj
 ## Hardware
 
 ESP32-C3 (8 MB flash, no PSRAM), 240×320 display, 3 ADC buttons, ES8311 codec, CW2017 fuel gauge. The console runs over USB-Serial-JTAG; UART0 TX shares GPIO21 with the backlight, so the firmware leaves UART0 unused.
+
+BLE runs on NimBLE; heart rate needs the CENTRAL and OBSERVER roles (see `sdkconfig.defaults`). The stack is only initialised the first time heart rate is switched on, so it costs no RAM while the feature is off.
 
 ## Licence and credits
 
